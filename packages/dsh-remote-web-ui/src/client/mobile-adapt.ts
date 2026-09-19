@@ -64,6 +64,12 @@ const EFFORT_BTN_ID = 'dshRemoteEffortPick'
 const COMPACT_CLASS = 'dsh-remote-compact-picker'
 /** Body class while the header actions are seated in the tabs row. */
 const HEADER_SEATED_CLASS = 'dsh-remote-header-seated'
+/**
+ * Width the seated header actions paint over the tabs row, as a CSS variable
+ * on <html>. The row caps its own width with it (see the v80 rules) instead of
+ * reserving the space with padding.
+ */
+const HEADER_RESERVE_VAR = '--dsh-remote-header-actions-reserve'
 /** The two composer picker entries the compact buttons drill into. */
 type PickerKind = 'model' | 'effort'
 /** Locale-dependent fast path for the official picker cells (zh/en). */
@@ -254,6 +260,22 @@ const ADAPT_CSS: readonly string[] = [
   // [class$="_tab"] misses the active tab (its class ends in "_tabActive")
   // — containment so BOTH tabs match.
   '[class$="_header"] [class$="_tabs"] [class*="_tab"]{font-size:12px;white-space:nowrap}',
+  // v80: the tabs row must give the painted actions their width up on its own.
+  // The v67 padding reservation could not do it: the row is a nowrap flex
+  // container, and once the tab labels plus their 36px gaps overflow the
+  // reduced content box the flex items spill over the padding box, so the
+  // trailing tabs render underneath the actions (reported on a phone: the
+  // "配置" tab label and the agent-preset label of a long custom preset name
+  // overlapped). Cap the row against the reserve and let the labels scroll
+  // instead. The reserve rides a CSS variable on <html> because the update
+  // lands before React re-creates the row node, and an inline reservation on
+  // that node is dropped until the next sync tick.
+  // The 2px bottom padding keeps the active-tab underline (positioned 1px
+  // below the tab box) inside the clipping box; the matching negative margin
+  // keeps the header height at its official value.
+  `body.${HEADER_SEATED_CLASS} [class$="_header"] [class$="_tabs"]{max-width:max(0px,calc(100% - var(${HEADER_RESERVE_VAR},0px)));overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch;padding-bottom:2px;margin-bottom:-2px}`,
+  `body.${HEADER_SEATED_CLASS} [class$="_header"] [class$="_tabs"]::-webkit-scrollbar{display:none}`,
+  `body.${HEADER_SEATED_CLASS} [class$="_header"] [class$="_tabs"] > [class*="_tab"]{flex:0 0 auto}`,
   // Mobile scope: hide the plugin surfaces that do not fit a phone — the
   // right-hand details column and every desktop-oriented tool surface. The
   // list keys on the L2 semantic roots (data-dsh-plugin, ownership stays
@@ -765,8 +787,14 @@ export function startMobileAdapt(): void {
     let dy = translate !== null ? parseFloat(translate[2] ?? '0') : 0
     const actionsRect = actions.getBoundingClientRect()
     const tabsRect = tabs.getBoundingClientRect()
-    // Horizontal: the actions' right edge lands on the tabs row's right edge.
-    const rightDiff = tabsRect.right - actionsRect.right
+    // Horizontal: the actions' right edge lands on the header's content edge,
+    // NOT on the tabs row's right edge. The row caps its own width against the
+    // reserve below (v80), so anchoring to the row would let the pair walk
+    // leftwards on every measurement.
+    const headerRect = header.getBoundingClientRect()
+    const headerStyle = getComputedStyle(header)
+    const contentRight = headerRect.right - (parseFloat(headerStyle.paddingRight) || 0) - (parseFloat(headerStyle.borderRightWidth) || 0)
+    const rightDiff = contentRight - actionsRect.right
     if (Math.abs(rightDiff) >= 0.5) dx = Math.round((dx + rightDiff) * 10) / 10
     // Vertical: the actions' text bottom lands on the tab text bottom.
     const tabBottom = textBottom(tabBtn)
@@ -783,13 +811,19 @@ export function startMobileAdapt(): void {
     }
     const next = `translate(${dx}px, ${dy}px)`
     if (actions.style.transform !== next) actions.style.transform = next
-    // Reserve the painted width so the tab labels never slide under it.
+    // Reserve the painted width on the row itself, so the tab labels never
+    // slide under it. The value rides a CSS variable on <html>: React
+    // recreates the row node on re-render, which would drop an inline
+    // reservation until the next sync tick, and until then the labels render
+    // underneath the painted actions.
     const reserve = `${Math.ceil(actionsRect.width) + 8}px`
-    if (tabs.style.paddingRight !== reserve) tabs.style.paddingRight = reserve
+    const rootStyle = document.documentElement.style
+    if (rootStyle.getPropertyValue(HEADER_RESERVE_VAR) !== reserve) rootStyle.setProperty(HEADER_RESERVE_VAR, reserve)
   }
 
   function unseatHeaderActions(): void {
     document.body.classList.remove(HEADER_SEATED_CLASS)
+    document.documentElement.style.removeProperty(HEADER_RESERVE_VAR)
     const header = document.querySelector('[class$="_header"]')
     const tabs = header !== null ? header.querySelector('[class$="_tabs"]') : null
     const actions = header !== null ? header.querySelector('[class$="_titleCluster"] [class$="_headerActions"]') : null
